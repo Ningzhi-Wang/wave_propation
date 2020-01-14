@@ -136,7 +136,7 @@ def propagation(model):
     Return (2d array): The pressure received at receiver-depth over the propagation time
     """
     nx = model.nx-2*model.pad_num
-    prop_lib = cdll.LoadLibrary("/home/miku/IC/Individual_Project/wave_propagation/build/libpropagation.so")
+    prop_lib = cdll.LoadLibrary("./build/libpropagation.so")
     step_num = round(model.total_time/model.dt)
     model.total_time = step_num*model.dt
     result_buffer = create_string_buffer(nx*step_num*4)

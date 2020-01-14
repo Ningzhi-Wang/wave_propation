@@ -3,8 +3,12 @@ import time
 import math
 import numpy as np
 from matplotlib import pyplot as plt
+import segyio
 
 class WaveModel2D(Structure):
+    """
+    Wave Model Struct as defined in C header file
+    """
     _fields_ = [
         ("nx", c_int), ("nz", c_int),
         ("dx", c_int), ("dt", c_float),
@@ -18,21 +22,68 @@ class WaveModel2D(Structure):
     ]
 
 
+def get_vel(file_name):
+    """
+    Get 2D velocity
+    Args:
+        file_name (str): The path of segy file containing velocity file
+    Return (2d numpy array): The numpy array of the velocity file
+    """
+    with segyio.open(file_name, "r") as f:
+        f.mmap()
+        nx = f.bin[segyio.BinField.Traces]
+        nz = f.bin[segyio.BinField.Samples]
+        vel = np.zeros((nx, nz))
+        vel_gen = f.trace[:]
+        for i, v in enumerate(vel_gen):
+            vel[i] = v
+        return vel.T
+
+def get_sources(file_name, idx=1):
+    """
+    Get one souce location
+    Args:
+        file_name (str): The path of geometry (.geo) file containing source locations
+        idx (int): The index of the souce to be retrieved
+    Return (float, float): The real location of retrieved source location in meter
+    """
+    sources = np.fromfile(file_name, sep=" ").reshape((-1, 4))
+    return sources[idx][1], sources[idx][3]
+
+def get_receiver_depth(file_name):
+    """
+    Get receiver depth
+    Args:
+        file_name (str): The path of geometry (.geo) file containing receiver locations
+    Return (float): The real depth of receivers in meter
+    """
+    receivers = np.fromfile(file_name, sep=" ").reshape((-1, 4))
+    return receivers[1][-1]
+
+
 def test_model(nx, nz):
     """
     Sample test velocity model for size over 100 x 100
-    Not nx is the number of columns and nz is number of rows
+    Note nx is the number of columns and nz is number of rows
     """
     c = np.full((nz,nx),1500.0)  # Note: 1500m/s is typical acoustic velocity of water
-    for ix in range(110,nx-80):  # gradient starting at 111th grid-point down to 80th from bottom
-        c[:,ix] = 1750.0+(ix-110)*10.0  # with values from 1750m/s to 3350m/s
-    c[:,nx-80:] = c[0,nx-81]
-    c[220:230,130:140]=3500.0  # small square which will show diffraction
+    for ix in range(110,nz-80):  # gradient starting at 111th grid-point down to 80th from bottom
+        c[ix:, ] = 1750.0+(ix-110)*10.0  # with values from 1750m/s to 3350m/s
+    c[nz-80:, :] = c[nz-81,0]
+    c[130:140, 220:230]=3500.0  # small square which will show diffraction
     c = c.astype(np.float32)
     return c
 
 
 def plot_at_receivers(r, nx, time, bounds):
+    """
+    Plot displacement as receiver over time time
+    Args:
+        r (2d array): Wave pressure values at receiver depth over given time
+        nx (int): the number of cells in horizontal direction of the model
+        time (float): Time legth
+        bounds (float): The maximum absolute value for pressure for plotting
+    """
     plt.figure(figsize=(10,7))
     plt.imshow(r.T, cmap='RdBu', interpolation='bilinear', aspect='auto',
                vmin=-bounds, vmax=bounds,   # set bounds for colourmap data
@@ -43,8 +94,24 @@ def plot_at_receivers(r, nx, time, bounds):
     plt.ylabel('Time / s')
     plt.show()
 
-def create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz,
-                      receiver_depth, courant_number=0.7, abs_layer_coefficient=4, abs_coefficient=0.2):
+def create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz, receiver_depth,
+                      courant_number=0.7, abs_layer_coefficient=1.6, abs_coefficient=0.1):
+    """
+    Create Wave model, adding paddings to velocity model and setup absorb factors for each cell
+    Args:
+        velocity_model (2d array): The velocity model for wave propagation
+        dx (float): The width/height of one cell in the model in meter
+        frequency (float): The heighest frequency for wave created by the source
+        total_time (float): The duration for the wave propagation
+        source_amplitude (float): The maximum amplitude of the wave created by the source
+        sx (int): The horizontal location of source in cell number
+        sz (int): The vertical location of source in cell number
+        receiver_depth(int): The depth of receivers in cell number
+        courant_number(int): Coefficient for time step to meet Courant–Friedrichs–Lewy condition
+        abs_layer_coefficient(float): The number of absorbing layers needed per meter of dx
+        abs_coefficient(flaot): The coefficient for pressure absorbing
+    Return (WaveModel2D): 2D Wave model containing all information for propagation
+    """
     nz, nx = velocity_model.shape
     dt = courant_number*dx/np.max(velocity_model)
     pad_size = int(np.ceil(dx*abs_layer_coefficient))
@@ -62,6 +129,12 @@ def create_test_model(velocity_model, dx, frequency, total_time, source_amplitud
 
 
 def propagation(model):
+    """
+    Call to C functions to perform propagation
+    Args:
+        model(WaveModel2D): Wave model for propagation
+    Return (2d array): The pressure received at receiver-depth over the propagation time
+    """
     nx = model.nx-2*model.pad_num
     prop_lib = cdll.LoadLibrary("/home/miku/IC/Individual_Project/wave_propagation/build/libpropagation.so")
     step_num = round(model.total_time/model.dt)
@@ -73,8 +146,10 @@ def propagation(model):
     propagate(byref(model), cast(result_buffer, POINTER(c_float)))
     return np.frombuffer(result_buffer, dtype=np.float32, count=step_num*nx).reshape((step_num, nx))
 
-
-def run():
+def artificial_model_test():
+    """
+    Test propagation on artificial model
+    """
     nx, nz = 501, 351
     frequency = 10.0
     total_time = 2.0
@@ -83,14 +158,37 @@ def run():
     receiver_depth = 70
     dx = 7
     courant_number = 0.7
-    abs_layer_coefficient = 4
-    abs_fact = 0.2
+    abs_layer_coefficient = 5
+    abs_fact = 0.1
     velocity_model = test_model(nx, nz)
     model = create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz,
                               receiver_depth, courant_number, abs_layer_coefficient, abs_fact)
     result = propagation(model)
     plot_at_receivers(result.T, nx, model.total_time, 0.06)
 
+def sample_model_test():
+    """
+    Test propagation on sample model
+    """
+    dx = 50
+    vel_model = get_vel("000-Template/J50-StartVp.sgy")
+    nz, nx = vel_model.shape
+    frequency = 4.0
+    total_time = 6.144
+    source_amplitude = 1.0
+    sx, sz = get_sources("000-Template/inputs/J50-Sources.geo", 300)
+    sx, sz = int(round(sx/dx)), int(round(sz/dx))
+    receiver_depth = get_receiver_depth("000-Template/inputs/J50-Receivers.geo")
+    receiver_depth = int(round(receiver_depth/dx))
+    courant_number = 0.7
+    abs_layer_coefficient = 1.6
+    abs_fact = 0.1
+    velocity_model = test_model(nx, nz)
+    model = create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz,
+                              receiver_depth, courant_number, abs_layer_coefficient, abs_fact)
+    result = propagation(model)
+    plot_at_receivers(result.T, nx, model.total_time, 0.1)
+
 
 if __name__ == "__main__":
-    run()
+    sample_model_test()

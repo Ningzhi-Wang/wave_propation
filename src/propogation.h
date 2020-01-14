@@ -6,7 +6,7 @@
 #include<string.h>
 #include<math.h>
 
-
+// 2D Wave Model used for wave propagation
 typedef struct wave_model_2d
 {
     int nx;
@@ -24,8 +24,9 @@ typedef struct wave_model_2d
     float* abs_model;
 } WAVE_MODLE_2D;
 
-float get_time_step_size(WAVE_MODLE_2D* model);
 
+// perform propgation for given wave model
+// receiver values will be stored at given result buffer
 int propagate(WAVE_MODLE_2D* model, float* result);
 
 

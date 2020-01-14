@@ -191,4 +191,4 @@ def sample_model_test():
 
 
 if __name__ == "__main__":
-    sample_model_test()
+    artificial_model_test()

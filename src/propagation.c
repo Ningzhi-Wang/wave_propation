@@ -1,4 +1,4 @@
-#include "propogation.h"
+#include "propagation.h"
 
 #define COURANT_NUMBER 0.7
 #define EPSILON 0.00001

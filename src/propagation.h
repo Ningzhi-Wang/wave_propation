@@ -20,6 +20,9 @@ typedef struct wave_model_2d
     int sx;
     int sz;
     int receiver_depth;
+    float water_den;
+    float water_vel;
+    float cutoff;
     float* velocity;
     float* abs_model;
 } WAVE_MODLE_2D;

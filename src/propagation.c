@@ -9,7 +9,7 @@
 
 // helper function to simulate wave pressure at source location over time
 // maybe changed to other kind of wavelet if needed
-float* ricker_source(float frequency, int step_num, float dt, float amplitude);
+int ricker_source(float frequency, float dt, float amplitude, float* src_values);
 void get_density(float* velocity, int nx, int nz, float water_vel, float water_den, float cutoff, float* density_buffer);
 
 int propagate(WAVE_MODLE_2D* model, float* result)
@@ -28,7 +28,13 @@ int propagate(WAVE_MODLE_2D* model, float* result)
     float dtdx2 = pow(dt, 2)/pow(model->dx, 2);
     int total_steps = model->total_time/dt;
     // Get inital pressures at souce location
-    float* src = ricker_source(model->frequency, total_steps, dt, model->source_amplitude);
+    float* src;
+    if (model->source) {
+        src = model->source;
+    }else {
+        src = calloc(total_steps, 4);
+        ricker_source(model->frequency, dt, model->source_amplitude, src);
+    }
     // iteration over time steps
     for (int step = 0; step < total_steps; ++step)
     {
@@ -77,20 +83,19 @@ int propagate(WAVE_MODLE_2D* model, float* result)
 }
 
 
-float* ricker_source(float frequency, int step_num, float dt, float amplitude)
+int ricker_source(float frequency, float dt, float amplitude, float* src_values)
 {
     float ts = MAGIC_SOURCE/frequency;
     int ns = (int) (ts/dt + 0.9999);
     ts = ns*dt;
     float a2 = pow(frequency * M_PI, 2);
     float t0 = ts/2 - dt/2;
-    float* src_values = calloc(step_num, 4);
     for (int i = 0; i < ns; ++i)
     {
         float at2 = a2*pow(i*dt-t0, 2);
         src_values[i] = amplitude * (1-2*at2) * exp(-at2);
     }
-    return src_values;
+    return 0;
 }
 
 void get_density(float* velocity, int nx, int nz, float water_vel, float water_den, float cutoff, float* density_buffer)

@@ -23,6 +23,7 @@ typedef struct wave_model_2d
     float water_den;
     float water_vel;
     float cutoff;
+    float* source;
     float* velocity;
     float* abs_model;
 } WAVE_MODLE_2D;

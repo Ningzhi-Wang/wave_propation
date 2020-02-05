@@ -20,9 +20,23 @@ class WaveModel2D(Structure):
         ("water_den", c_float),
         ("water_vel", c_float),
         ("cutoff", c_float),
+        ("source", POINTER(c_float)),
         ("velocity", POINTER(c_float)),
         ("abs_model", POINTER(c_float))
     ]
+
+def plot_model(c):
+    """
+    Plot Velocity model
+    """
+    plt.figure(figsize=(10,6))
+    plt.imshow(c.T, cmap=plt.get_cmap(name="jet"))
+    plt.colorbar()
+    plt.xlabel('x gridpoints')
+    plt.ylabel('z gridpoints')
+    plt.title('Velocity Model (m/s)')
+    plt.show()
+
 
 
 def get_vel(file_name):
@@ -53,7 +67,14 @@ def get_sources(file_name, idx=1):
     sources = np.fromfile(file_name, sep=" ").reshape((-1, 4))
     return sources[idx][1], sources[idx][3]
 
-def get_receiver_depth(file_name):
+def get_signature(file_name, idx):
+    with segyio.open(file_name, "r", ignore_geometry=True) as f:
+        f.mmap()
+        source = f.trace[idx]
+    return source
+
+
+def get_receiver_depth(file_name, dx, souce_num, idx):
     """
     Get receiver depth
     Args:
@@ -61,8 +82,11 @@ def get_receiver_depth(file_name):
     Return (float): The real depth of receivers in meter
     """
     receivers = np.fromfile(file_name, sep=" ").reshape((-1, 4))
-    return receivers[1][-1]
-
+    rev_num = receivers[0, 0]
+    rev_per_src = int(round(rev_num / souce_num))
+    start_rev = receivers[idx*rev_per_src+1][1]
+    end_rev = receivers[(idx+1)*rev_per_src][1]
+    return int(receivers[1][-1]/dx), int(start_rev/dx), int(end_rev/dx)
 
 def test_model(nx, nz):
     """
@@ -98,7 +122,7 @@ def plot_at_receivers(r, nx, time, bounds):
     plt.show()
 
 def create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz, receiver_depth,
-                      courant_number=0.4, abs_layer_coefficient=1.6, abs_coefficient=0.1):
+                      dt, abs_layer_coefficient=1.6, abs_coefficient=0.1, source=None):
     """
     Create Wave model, adding paddings to velocity model and setup absorb factors for each cell
     Args:
@@ -116,7 +140,6 @@ def create_test_model(velocity_model, dx, frequency, total_time, source_amplitud
     Return (WaveModel2D): 2D Wave model containing all information for propagation
     """
     nz, nx = velocity_model.shape
-    dt = courant_number*dx/np.max(velocity_model)
     pad_size = int(np.ceil(dx*abs_layer_coefficient))
     new_vel_model = np.pad(velocity_model, ((3, pad_size), (pad_size, pad_size)), "symmetric").astype(np.float32)
     absorb_facts = np.fromfunction(
@@ -125,9 +148,11 @@ def create_test_model(velocity_model, dx, frequency, total_time, source_amplitud
         new_vel_model.shape)
     absorb_facts = (absorb_facts * new_vel_model * dt/dx * abs_coefficient).astype(np.float32)
     nz, nx = new_vel_model.shape
+    if source is not None:
+        source = source.ctypes.data_as(POINTER(c_float))
     return WaveModel2D(nx=nx, nz=nz, dx=dx, dt=dt, pad_num=pad_size, frequency=frequency, total_time=total_time,
                        source_amplitude=source_amplitude, sx=sx+pad_size, sz=sz+3, receiver_depth=receiver_depth+3,
-                       water_den = 1.0, water_vel = 1500, cutoff=1650,
+                       water_den = 1.0, water_vel = 1500, cutoff=1650, source=source,
                        velocity=new_vel_model.ctypes.data_as(POINTER(c_float)),
                        abs_model=absorb_facts.ctypes.data_as(POINTER(c_float)))
 
@@ -165,22 +190,11 @@ def artificial_model_test():
     abs_layer_coefficient = 5
     abs_fact = 0.2
     velocity_model = test_model(nx, nz)
+    dt = courant_number*dx/np.max(velocity_model)
     model = create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz,
-                              receiver_depth, courant_number, abs_layer_coefficient, abs_fact)
+                              receiver_depth, dt, abs_layer_coefficient, abs_fact)
     result = propagation(model)
     plot_at_receivers(result.T, nx, model.total_time, 0.03)
-
-def plot_model(c):
-    """
-    Plot Velocity model
-    """
-    plt.figure(figsize=(10,6))
-    plt.imshow(c.T, cmap=plt.get_cmap(name="jet"))
-    plt.colorbar()
-    plt.xlabel('x gridpoints')
-    plt.ylabel('z gridpoints')
-    plt.title('Velocity Model (m/s)')
-    plt.show()
 
 def sample_model_test():
     """
@@ -189,23 +203,23 @@ def sample_model_test():
     dx = 50
     vel_model = get_vel("000-Template/J50-StartVp.sgy")
     nz, nx = vel_model.shape
-    plot_model(vel_model.T)
     frequency = 4.0
     total_time = 6.144
     source_amplitude = 1.0
     sx, sz = get_sources("000-Template/inputs/J50-Sources.geo", 300)
+    source = get_signature("000-Template/inputs/J50-Signature.sgy", 300)
     sx, sz = int(round(sx/dx)), int(round(sz/dx))
-    receiver_depth = get_receiver_depth("000-Template/inputs/J50-Receivers.geo")
-    receiver_depth = int(round(receiver_depth/dx))
-    courant_number = 0.4
+    receiver_depth, rev_s, rev_e = get_receiver_depth("000-Template/inputs/J50-Receivers.geo", dx, 620, 300)
+    dt = total_time/len(source)
     abs_layer_coefficient = 1.6
     abs_fact = 0.1
     velocity_model = test_model(nx, nz)
     model = create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz,
-                              receiver_depth, courant_number, abs_layer_coefficient, abs_fact)
+                              receiver_depth, dt, abs_layer_coefficient, abs_fact, source)
     result = propagation(model)
-    plot_at_receivers(result.T, nx, model.total_time, 0.005)
+    result = result[:, rev_s:rev_e+1]
+    plot_at_receivers(result.T, nx, model.total_time, 1)
 
 
 if __name__ == "__main__":
-    artificial_model_test()
+    sample_model_test()

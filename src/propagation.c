@@ -14,7 +14,6 @@ void get_density(float* velocity, int nx, int nz, float water_vel, float water_d
 
 int propagate(WAVE_MODLE_2D* model, float* result)
 {
-    FILE* logger = fopen("logger.log", "w");
     int nx = model->nx;
     float dt = model->dt;
     // calucated souce index
@@ -31,7 +30,6 @@ int propagate(WAVE_MODLE_2D* model, float* result)
     // Get inital pressures at souce location
     float* src = ricker_source(model->frequency, total_steps, dt, model->source_amplitude);
     // iteration over time steps
-    int ind = 1;
     for (int step = 0; step < total_steps; ++step)
     {
         // swith model after each time step progress
@@ -54,17 +52,13 @@ int propagate(WAVE_MODLE_2D* model, float* result)
                             49.0/18.0*u_curr[i*nx+j]*density[i*nx+j];
                 float d2z = 1.0/90.0*(u_curr[(i-3)*nx+j]*density[(i-3)*nx+j] + u_curr[(i+3)*nx+j]*density[(i+3)*nx+j]) -
                             3.0/20.0*(u_curr[(i-2)*nx+j]*density[(i-2)*nx+j] + u_curr[(i+2)*nx+j]*density[(i+2)*nx+j]) +
-                            3.0/2.0*(u_curr[(i-1)*nx+j]*density[(i-1)*nx+j-3] + u_curr[(i+1)*nx+j]*density[(i+1)*nx+j]) -
+                            3.0/2.0*(u_curr[(i-1)*nx+j]*density[(i-1)*nx+j] + u_curr[(i+1)*nx+j]*density[(i+1)*nx+j]) -
                             49.0/18.0*u_curr[i*nx+j]*density[i*nx+j];
 
                 //perform update of wave pressure
                 double q = model->abs_model[i*nx+j];
-                u_next[i*nx+j] = (dtdx2*pow(model->velocity[i*nx+j], 2)*(d2x+d2z) / density[i*nx+j] +
+                u_next[i*nx+j] = (dtdx2*pow(model->velocity[i*nx+j], 2)*(d2x+d2z)/density[i*nx+j] +
                                   (2-pow(q, 2))*u_curr[i*nx+j]-(1-q)*u_prev[i*nx+j])/(1+q) ;
-                if (u_next[i*nx+j] > 1 && ind) {
-                    //fprintf(logger, "%d, %d, %d, %f, %f , %f, %f\n", step, i, j, d2x, d2x, (2-pow(q, 2))*u_curr[i*nx+j], dtdx2*pow(model->velocity[i*nx+j], 2));
-                    ind = 0;
-                }
 
             }
         }
@@ -75,7 +69,6 @@ int propagate(WAVE_MODLE_2D* model, float* result)
         memcpy(result+step*(nx-2*model->pad_num), u_next+model->receiver_depth*nx+model->pad_num,
                (nx-2*model->pad_num)*sizeof(float));
     }
-    fclose(logger);
     free (src);
     free(u_curr);
     free(u_prev);
@@ -102,7 +95,6 @@ float* ricker_source(float frequency, int step_num, float dt, float amplitude)
 
 void get_density(float* velocity, int nx, int nz, float water_vel, float water_den, float cutoff, float* density_buffer)
 {
-    FILE* logger = fopen("den.log", "w");
     for (int i = 0; i < nz; ++i)
     {
         for (int j = 0; j < nx; ++j)
@@ -119,10 +111,6 @@ void get_density(float* velocity, int nx, int nz, float water_vel, float water_d
                 float ratio = (vel-water_vel)/(cutoff-water_vel);
                 density_buffer[i*nx+j] = 1.0 / (ratio * 0.23 * pow(vel, 0.25) + (1-ratio) * water_den);
             }
-            if (density_buffer[i*nx+j] > 1) {
-                fprintf(logger, "%d, %d, %f", i, j, 1/density_buffer[i*nx+j]);
-            }
         }
     }
-    fclose(logger);
 }

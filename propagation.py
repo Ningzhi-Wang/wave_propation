@@ -70,10 +70,10 @@ def test_model(nx, nz):
     Note nx is the number of columns and nz is number of rows
     """
     c = np.full((nz,nx),1500.0)  # Note: 1500m/s is typical acoustic velocity of water
-    #for ix in range(110,nz-80):  # gradient starting at 111th grid-point down to 80th from bottom
-    #    c[ix:, ] = 1750.0+(ix-110)*10.0  # with values from 1750m/s to 3350m/s
-    #c[nz-80:, :] = c[nz-81,0]
-    #c[130:140, 220:230]=3500.0  # small square which will show diffraction
+    for ix in range(110,nz-80):  # gradient starting at 111th grid-point down to 80th from bottom
+        c[ix:, ] = 1750.0+(ix-110)*10.0  # with values from 1750m/s to 3350m/s
+    c[nz-80:, :] = c[nz-81,0]
+    c[130:140, 220:230]=3500.0  # small square which will show diffraction
     c = c.astype(np.float32)
     return c
 
@@ -158,17 +158,29 @@ def artificial_model_test():
     frequency = 10.0
     total_time = 2.0
     source_amplitude = 1.0
-    sx, sz = 150, 80
-    receiver_depth = 70
+    sx, sz = 150, 0
+    receiver_depth = 0
     dx = 7
-    courant_number = 0.4
+    courant_number = 0.3
     abs_layer_coefficient = 5
-    abs_fact = 0.1
+    abs_fact = 0.2
     velocity_model = test_model(nx, nz)
     model = create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz,
                               receiver_depth, courant_number, abs_layer_coefficient, abs_fact)
     result = propagation(model)
-    plot_at_receivers(result.T, nx, model.total_time, 0.06)
+    plot_at_receivers(result.T, nx, model.total_time, 0.03)
+
+def plot_model(c):
+    """
+    Plot Velocity model
+    """
+    plt.figure(figsize=(10,6))
+    plt.imshow(c.T, cmap=plt.get_cmap(name="jet"))
+    plt.colorbar()
+    plt.xlabel('x gridpoints')
+    plt.ylabel('z gridpoints')
+    plt.title('Velocity Model (m/s)')
+    plt.show()
 
 def sample_model_test():
     """
@@ -177,6 +189,7 @@ def sample_model_test():
     dx = 50
     vel_model = get_vel("000-Template/J50-StartVp.sgy")
     nz, nx = vel_model.shape
+    plot_model(vel_model.T)
     frequency = 4.0
     total_time = 6.144
     source_amplitude = 1.0
@@ -191,8 +204,8 @@ def sample_model_test():
     model = create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz,
                               receiver_depth, courant_number, abs_layer_coefficient, abs_fact)
     result = propagation(model)
-    plot_at_receivers(result.T, nx, model.total_time, 0.1)
+    plot_at_receivers(result.T, nx, model.total_time, 0.005)
 
 
 if __name__ == "__main__":
-    sample_model_test()
+    artificial_model_test()

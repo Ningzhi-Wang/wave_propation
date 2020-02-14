@@ -24,7 +24,6 @@ def get_receiver_depth(file_name):
 def get_observation(file_name, idx):
     with segyio.open(file_name, "r", strict=False, ignore_geometry=True) as f:
         f.mmap()
-        print(len(f.header))
         trace_num = len(f.header)
         obs_trace = []
         for i in range(trace_num):
@@ -56,18 +55,9 @@ def get_source(file_name, idx):
         return f.trace[idx].astype(np.float32)
 
 
-def get_loss(p, d):
+def get_loss(p, obs_file, idx):
+    d = get_observation(obs_file, idx)
+    p = p.flatten()
+    d = d.flatten()
     a = (p.T@d+d.T@p)/(2*p.T@p)
     return np.sum(np.sqrt(np.power(d-a*p, 2)))
-
-if __name__ == "__main__":
-    #print(get_vel("000-template/j50-startvp.sgy"))
-    #sx, sz = get_sources("000-Template/inputs/J50-Sources.geo")
-    #receiver_depth = get_receiver_depth("000-Template/inputs/J50-Receivers.geo")
-    p = get_observation("000-Template/J50-Synthetic.sgy", 300)
-    #d = get_observation("000-Template/inputs/J50-Observed.sgy", 300)
-    plot_at_receivers(p, 480, 6.144, np.max(p)/2)
-    #plot_at_receivers(d, 480, 6.144, np.max(d)/2)
-    #p=p.reshape((-1, 1))
-    #d=d.reshape((-1, 1))
-    #print(get_loss(p, d))

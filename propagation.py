@@ -4,6 +4,7 @@ import math
 import numpy as np
 from matplotlib import pyplot as plt
 import segyio
+from hicks_interpolation import interpolate
 
 class WaveModel2D(Structure):
     """
@@ -38,7 +39,6 @@ def plot_model(c):
     plt.show()
 
 
-
 def get_vel(file_name):
     """
     Get 2D velocity
@@ -56,6 +56,7 @@ def get_vel(file_name):
             vel[i] = v
         return vel.T
 
+
 def get_sources(file_name, idx=1):
     """
     Get one souce location
@@ -65,7 +66,7 @@ def get_sources(file_name, idx=1):
     Return (float, float): The real location of retrieved source location in meter
     """
     sources = np.fromfile(file_name, sep=" ").reshape((-1, 4))
-    return sources[idx][1], sources[idx][3]
+    return sources[0, 0], sources[idx, 1], sources[idx, 3]
 
 def get_signature(file_name, idx):
     with segyio.open(file_name, "r", ignore_geometry=True) as f:
@@ -73,20 +74,26 @@ def get_signature(file_name, idx):
         source = f.trace[idx]
     return source
 
+def get_idx(file_name, idx):
+    links = np.fromfile(file_name, dtype=np.int64)[3:].reshape(-1, 3)
+    return links[links[:, 1] == idx, 2]
 
-def get_receiver_depth(file_name, dx, souce_num, idx):
+def get_receiver_depth(rev_file, idx_file, dx, souce_num, idx):
     """
     Get receiver depth
     Args:
         file_name (str): The path of geometry (.geo) file containing receiver locations
     Return (float): The real depth of receivers in meter
     """
-    receivers = np.fromfile(file_name, sep=" ").reshape((-1, 4))
-    rev_num = receivers[0, 0]
-    rev_per_src = int(round(rev_num / souce_num))
-    start_rev = receivers[idx*rev_per_src+1][1]
-    end_rev = receivers[(idx+1)*rev_per_src][1]
-    return int(receivers[1][-1]/dx), int(start_rev/dx), int(end_rev/dx)
+    receivers = np.fromfile(rev_file, sep=" ").reshape((-1, 4))[1:]
+    rev_idx = get_idx(idx_file, idx)
+    rev_loc = receivers[np.isin(receivers[:, 0], rev_idx)][:, 1]
+    #start_rev = receivers[idx*rev_per_src+1][1]
+    #end_rev = receivers[(idx+1)*rev_per_src][1]
+    #return receivers[1][-1]/dx, int(start_rev/dx), int(end_rev/dx)
+    #print(receivers.shape)
+    return int(receivers[0][-1]/dx), rev_loc/dx
+
 
 def test_model(nx, nz):
     """
@@ -120,6 +127,7 @@ def plot_at_receivers(r, nx, time, bounds):
     plt.xlabel('Receiver number')
     plt.ylabel('Time / s')
     plt.show()
+
 
 def create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz, receiver_depth,
                       dt, abs_layer_coefficient=1.6, abs_coefficient=0.1, source=None):
@@ -169,16 +177,14 @@ def propagation(model):
     step_num = round(model.total_time/model.dt)
     model.total_time = step_num*model.dt
     result_buffer = create_string_buffer(nx*step_num*4)
-    propagate = prop_lib.propagate
-    propagate.restype = c_int
-    propagate.argtypes = [POINTER(WaveModel2D), POINTER(c_float)]
-    propagate(byref(model), cast(result_buffer, POINTER(c_float)))
+    prop_kernel = prop_lib.propagate
+    prop_kernel.restype = c_int
+    prop_kernel.argtypes = [POINTER(WaveModel2D), POINTER(c_float)]
+    prop_kernel(byref(model), cast(result_buffer, POINTER(c_float)))
     return np.frombuffer(result_buffer, dtype=np.float32, count=step_num*nx).reshape((step_num, nx))
 
+
 def artificial_model_test():
-    """
-    Test propagation on artificial model
-    """
     nx, nz = 501, 351
     frequency = 10.0
     total_time = 2.0
@@ -196,30 +202,35 @@ def artificial_model_test():
     result = propagation(model)
     plot_at_receivers(result.T, nx, model.total_time, 0.03)
 
-def sample_model_test():
-    """
-    Test propagation on sample model
-    """
-    dx = 50
-    vel_model = get_vel("000-Template/J50-StartVp.sgy")
+
+def propagate(idx, vel_file=None, sig_file=None, src_file=None, rev_file=None,
+              idx_file=None, dx=0, freq=0, total_time=0, **kwargs):
+    vel_model = get_vel(vel_file)
     nz, nx = vel_model.shape
-    frequency = 4.0
-    total_time = 6.144
     source_amplitude = 1.0
-    sx, sz = get_sources("000-Template/inputs/J50-Sources.geo", 300)
-    source = get_signature("000-Template/inputs/J50-Signature.sgy", 300)
+    src_num, sx, sz = get_sources(src_file, idx)
+    source = get_signature(sig_file, idx)
     sx, sz = int(round(sx/dx)), int(round(sz/dx))
-    receiver_depth, rev_s, rev_e = get_receiver_depth("000-Template/inputs/J50-Receivers.geo", dx, 620, 300)
+    #receiver_depth, rev_s, rev_e = get_receiver_depth(rev_file, dx, src_num, idx)
+    receiver_depth, receivers = get_receiver_depth(rev_file, idx_file, dx, src_num, idx)
     dt = total_time/len(source)
+    # magic coefficients
     abs_layer_coefficient = 1.6
     abs_fact = 0.1
     velocity_model = test_model(nx, nz)
-    model = create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz,
+    model = create_test_model(velocity_model, dx, freq, total_time, source_amplitude, sx, sz,
                               receiver_depth, dt, abs_layer_coefficient, abs_fact, source)
     result = propagation(model)
-    result = result[:, rev_s:rev_e+1]
-    plot_at_receivers(result.T, nx, model.total_time, 1)
+    result = np.array([interpolate(result.T, r) for r in receivers])
+    #result = result[:, rev_s:rev_e+1]
+    return result
+
 
 
 if __name__ == "__main__":
-    sample_model_test()
+    result = propagate(300, "000-Template/inputs/J50-TrueVp.sgy", "000-Template/inputs/J50-Signature.sgy",
+                       "000-Template/inputs/J50-Sources.geo", "000-Template/inputs/J50-Receivers.geo",
+                       "000-Template/inputs/J50-Observed.idx",
+                       50, 4.0, 6.144)
+    plot_at_receivers(result, 480, 6.144, 0.01)
+

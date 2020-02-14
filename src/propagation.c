@@ -75,7 +75,8 @@ int propagate(WAVE_MODLE_2D* model, float* result)
         memcpy(result+step*(nx-2*model->pad_num), u_next+model->receiver_depth*nx+model->pad_num,
                (nx-2*model->pad_num)*sizeof(float));
     }
-    free (src);
+    if (!model->source)
+        free (src);
     free(u_curr);
     free(u_prev);
     free(u_next);

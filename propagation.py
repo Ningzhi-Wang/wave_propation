@@ -215,8 +215,11 @@ def artificial_model_test():
     source = create_ricker(frequency, dt, source_amplitude, int(total_time/dt))
     model = create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz,
                               receiver_depth, dt, 1.0, 1500, 1650, abs_layer_coefficient, abs_fact, source)
+    start = time.time()
     result = propagation(*model)
+    end = time.time()
     plot_at_receivers(result.T, nx, model[0].total_time, 0.03)
+    print("total time: {}".format(end-start))
 
 
 def propagate(idx, water_den=1.0, water_vel=1500, cutoff=1650, vel_model=None, vel_file=None, sig_file=None, src_file=None,
@@ -245,15 +248,5 @@ def propagate(idx, water_den=1.0, water_vel=1500, cutoff=1650, vel_model=None, v
 
 
 if __name__ == "__main__":
-    result = np.fromfile("./fpga.csv", np.float32, -1).reshape(3333, -1) 
-    nx = result.shape[1]
-    plot_at_receivers(result.T, nx, 2.0, 0.03)
-    #artificial_model_test()
-    #result = propagate(300, 1000, 1500, 1650, None, "../model/000-Template/inputs/J50-TrueVp.sgy",
-    #                   "../model/000-Template/inputs/J50-Signature.sgy",
-    #                   "../model/000-Template/inputs/J50-Sources.geo",
-    #                   "../model/000-Template/inputs/J50-Receivers.geo",
-    #                   "../model/000-Template/inputs/J50-Observed.idx",
-    #                   50, 4.0, 6.144)
-    #plot_at_receivers(result, 480, 6.144, result.max())
-
+    artificial_model_test()
+    

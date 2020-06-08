@@ -1,7 +1,9 @@
 from ctypes import *
 import time
+import os
 import math
 import numpy as np
+from numpy.ctypeslib import ndpointer
 from matplotlib import pyplot as plt
 import segyio
 from hicks_interpolation import interpolate
@@ -13,25 +15,21 @@ class WaveModel2D(Structure):
     _fields_ = [
         ("nx", c_int), ("nz", c_int),
         ("dx", c_int), ("dt", c_float),
-        ("pad_num", c_int), ("frequency", c_float),
+        ("pad_num", c_int),
         ("total_time", c_float),
-        ("source_amplitude", c_float),
         ("sx", c_int), ("sz", c_int),
         ("receiver_depth", c_int),
         ("water_den", c_float),
         ("water_vel", c_float),
-        ("cutoff", c_float),
-        ("source", POINTER(c_float)),
-        ("velocity", POINTER(c_float)),
-        ("abs_model", POINTER(c_float))
-    ]
+        ("cutoff", c_float)
+   ]
 
 def plot_model(c):
     """
     Plot Velocity model
     """
     plt.figure(figsize=(10,6))
-    plt.imshow(c.T, cmap=plt.get_cmap(name="jet"))
+    plt.imshow(c.T)
     plt.colorbar()
     plt.xlabel('x gridpoints')
     plt.ylabel('z gridpoints')
@@ -126,11 +124,12 @@ def plot_at_receivers(r, nx, time, bounds):
     plt.colorbar()
     plt.xlabel('Receiver number')
     plt.ylabel('Time / s')
+    plt.savefig("./fpga.png")
     plt.show()
 
 
 def create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz, receiver_depth,
-                      dt, abs_layer_coefficient=1.6, abs_coefficient=0.1, source=None):
+                      dt, water_den, water_vel, cutoff, abs_layer_coefficient=1.6, abs_coefficient=0.1, source=None):
     """
     Create Wave model, adding paddings to velocity model and setup absorb factors for each cell
     Args:
@@ -144,7 +143,7 @@ def create_test_model(velocity_model, dx, frequency, total_time, source_amplitud
         receiver_depth(int): The depth of receivers in cell number
         courant_number(int): Coefficient for time step to meet Courant–Friedrichs–Lewy condition
         abs_layer_coefficient(float): The number of absorbing layers needed per meter of dx
-        abs_coefficient(flaot): The coefficient for pressure absorbing
+        abs_coefficient(float): The coefficient for pressure absorbing
     Return (WaveModel2D): 2D Wave model containing all information for propagation
     """
     nz, nx = velocity_model.shape
@@ -156,32 +155,48 @@ def create_test_model(velocity_model, dx, frequency, total_time, source_amplitud
         new_vel_model.shape)
     absorb_facts = (absorb_facts * new_vel_model * dt/dx * abs_coefficient).astype(np.float32)
     nz, nx = new_vel_model.shape
-    if source is not None:
-        source = source.ctypes.data_as(POINTER(c_float))
-    return WaveModel2D(nx=nx, nz=nz, dx=dx, dt=dt, pad_num=pad_size, frequency=frequency, total_time=total_time,
-                       source_amplitude=source_amplitude, sx=sx+pad_size, sz=sz+3, receiver_depth=receiver_depth+3,
-                       water_den = 1.0, water_vel = 1500, cutoff=1650, source=source,
-                       velocity=new_vel_model.ctypes.data_as(POINTER(c_float)),
-                       abs_model=absorb_facts.ctypes.data_as(POINTER(c_float)))
+    sources = source.reshape(-1, 1).astype(np.float32)
+    return (WaveModel2D(nx=nx, nz=nz, dx=dx, dt=dt, pad_num=pad_size, total_time=total_time,
+                       sx=sx+pad_size, sz=sz+3, receiver_depth=receiver_depth+3,
+                       water_den=water_den, water_vel=water_vel, cutoff=cutoff), 
+            new_vel_model, absorb_facts, sources)
 
 
-def propagation(model):
+def propagation(model, vel, abs, src):
     """
     Call to C functions to perform propagation
     Args:
         model(WaveModel2D): Wave model for propagation
     Return (2d array): The pressure received at receiver-depth over the propagation time
     """
+    vel = np.ascontiguousarray(vel.astype(np.float32))
+    abs = np.ascontiguousarray(abs.astype(np.float32))
+    src = np.ascontiguousarray(src.astype(np.float32))
     nx = model.nx-2*model.pad_num
-    prop_lib = cdll.LoadLibrary("./build/libpropagation.so")
+    dir_path = os.path.dirname(os.path.abspath(__file__))
+    prop_lib = cdll.LoadLibrary(os.path.join(dir_path, "build/libpropagation.so"))
     step_num = round(model.total_time/model.dt)
     model.total_time = step_num*model.dt
-    result_buffer = create_string_buffer(nx*step_num*4)
+    result = np.empty((nx*step_num)).astype(np.float32)
     prop_kernel = prop_lib.propagate
     prop_kernel.restype = c_int
-    prop_kernel.argtypes = [POINTER(WaveModel2D), POINTER(c_float)]
-    prop_kernel(byref(model), cast(result_buffer, POINTER(c_float)))
-    return np.frombuffer(result_buffer, dtype=np.float32, count=step_num*nx).reshape((step_num, nx))
+    p_type = ndpointer(c_float, flags="C_CONTIGUOUS")
+    prop_kernel.argtypes = [POINTER(WaveModel2D), p_type, p_type, p_type, p_type]
+    prop_kernel(byref(model), vel, abs, src, result)
+    return result.reshape(-1, nx)
+
+
+def create_ricker(freq,dt,ampl, time_steps):
+    ts = 2.1/freq  # desired length of wavelet in time is related to peak frequency
+    ns = int(ts/dt+0.9999)  # figure out how many time-steps are needed to cover that time
+    ts = ns*dt  # and now turn that back into a time that's exactly the required number of steps
+    a2 = (freq*np.pi)**2  # a squared (see equation above)
+    t0 = ts/2 - dt/2  # midpoint time of wavelet
+    src = np.zeros(time_steps)
+    # create Ricker wavelet (see equation above), offset by time t0 (so midpoint of wavelet is at time t=t0)
+    for i in range(ns):
+        src[i] = ampl*( (1 - 2*a2*((i*dt-t0)**2)) * np.exp(-a2*((i*dt-t0)**2)) )
+    return src
 
 
 def artificial_model_test():
@@ -189,48 +204,56 @@ def artificial_model_test():
     frequency = 10.0
     total_time = 2.0
     source_amplitude = 1.0
-    sx, sz = 150, 0
-    receiver_depth = 0
+    sx, sz = 150, 80
+    receiver_depth = 70
     dx = 7
     courant_number = 0.3
     abs_layer_coefficient = 5
     abs_fact = 0.2
     velocity_model = test_model(nx, nz)
     dt = courant_number*dx/np.max(velocity_model)
+    source = create_ricker(frequency, dt, source_amplitude, int(total_time/dt))
     model = create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz,
-                              receiver_depth, dt, abs_layer_coefficient, abs_fact)
-    result = propagation(model)
-    plot_at_receivers(result.T, nx, model.total_time, 0.03)
+                              receiver_depth, dt, 1.0, 1500, 1650, abs_layer_coefficient, abs_fact, source)
+    result = propagation(*model)
+    plot_at_receivers(result.T, nx, model[0].total_time, 0.03)
 
 
-def propagate(idx, vel_file=None, sig_file=None, src_file=None, rev_file=None,
-              idx_file=None, dx=0, freq=0, total_time=0, **kwargs):
-    vel_model = get_vel(vel_file)
-    nz, nx = vel_model.shape
+def propagate(idx, water_den=1.0, water_vel=1500, cutoff=1650, vel_model=None, vel_file=None, sig_file=None, src_file=None,
+              rev_file=None, idx_file=None, dx=0, freq=0, total_time=0, **kwargs):
+    if vel_model is None:
+        vel_model = get_vel(vel_file)
     source_amplitude = 1.0
     src_num, sx, sz = get_sources(src_file, idx)
     source = get_signature(sig_file, idx)
-    sx, sz = int(round(sx/dx)), int(round(sz/dx))
+    sx, sz = sx/dx, sz/dx
+    sx, sz = int(sx), int(sz)
     #receiver_depth, rev_s, rev_e = get_receiver_depth(rev_file, dx, src_num, idx)
     receiver_depth, receivers = get_receiver_depth(rev_file, idx_file, dx, src_num, idx)
     dt = total_time/len(source)
     # magic coefficients
     abs_layer_coefficient = 1.6
     abs_fact = 0.1
-    velocity_model = test_model(nx, nz)
-    model = create_test_model(velocity_model, dx, freq, total_time, source_amplitude, sx, sz,
-                              receiver_depth, dt, abs_layer_coefficient, abs_fact, source)
-    result = propagation(model)
+
+    model = create_test_model(vel_model, dx, freq, total_time, source_amplitude, sx, sz, receiver_depth,
+                              dt, water_den, water_vel, cutoff, abs_layer_coefficient, abs_fact, source)
+
+    result = propagation(*model)
     result = np.array([interpolate(result.T, r) for r in receivers])
-    #result = result[:, rev_s:rev_e+1]
     return result
 
 
 
 if __name__ == "__main__":
-    result = propagate(300, "000-Template/inputs/J50-TrueVp.sgy", "000-Template/inputs/J50-Signature.sgy",
-                       "000-Template/inputs/J50-Sources.geo", "000-Template/inputs/J50-Receivers.geo",
-                       "000-Template/inputs/J50-Observed.idx",
-                       50, 4.0, 6.144)
-    plot_at_receivers(result, 480, 6.144, 0.01)
+    result = np.fromfile("./fpga.csv", np.float32, -1).reshape(3333, -1) 
+    nx = result.shape[1]
+    plot_at_receivers(result.T, nx, 2.0, 0.03)
+    #artificial_model_test()
+    #result = propagate(300, 1000, 1500, 1650, None, "../model/000-Template/inputs/J50-TrueVp.sgy",
+    #                   "../model/000-Template/inputs/J50-Signature.sgy",
+    #                   "../model/000-Template/inputs/J50-Sources.geo",
+    #                   "../model/000-Template/inputs/J50-Receivers.geo",
+    #                   "../model/000-Template/inputs/J50-Observed.idx",
+    #                   50, 4.0, 6.144)
+    #plot_at_receivers(result, 480, 6.144, result.max())
 

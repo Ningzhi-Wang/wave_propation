@@ -6,13 +6,14 @@
 
 #define isZero(f) fabs(f) < EPSILON
 #define notZero(f) fabs(f) > EPSILON
+#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
+#define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
 
 // helper function to simulate wave pressure at source location over time
 // maybe changed to other kind of wavelet if needed
-int ricker_source(float frequency, float dt, float amplitude, float* src_values);
 void get_density(float* velocity, int nx, int nz, float water_vel, float water_den, float cutoff, float* density_buffer);
 
-int propagate(WAVE_MODLE_2D* model, float* result)
+int propagate(WAVE_MODLE_2D* model, float* vel,  float* abs, float* src, float* result)
 {
     int nx = model->nx;
     float dt = model->dt;
@@ -22,19 +23,12 @@ int propagate(WAVE_MODLE_2D* model, float* result)
     float* u_curr = calloc(model->nx*model->nz, 4);
     float* u_prev = calloc(model->nx*model->nz, 4);
     float* u_next = calloc(model->nx*model->nz, 4);
+
     float* density = calloc(model->nx*model->nz, 4);
-    get_density(model->velocity, nx, model->nz, model->water_vel, model->water_den, model->cutoff, density);
+    get_density(vel, nx, model->nz, model->water_vel, model->water_den, model->cutoff, density);
     // Value used muliple times in propagation simulation
     float dtdx2 = pow(dt, 2)/pow(model->dx, 2);
     int total_steps = model->total_time/dt;
-    // Get inital pressures at souce location
-    float* src;
-    if (model->source) {
-        src = model->source;
-    }else {
-        src = calloc(total_steps, 4);
-        ricker_source(model->frequency, dt, model->source_amplitude, src);
-    }
     // iteration over time steps
     for (int step = 0; step < total_steps; ++step)
     {
@@ -43,7 +37,6 @@ int propagate(WAVE_MODLE_2D* model, float* result)
         u_prev = u_curr;
         u_curr = u_next;
         u_next = temp;
-        // inject source value at source location
         u_curr[src_loc] = isZero(src[step])?u_curr[src_loc]:src[step];
 
         //iteration over the model
@@ -62,8 +55,8 @@ int propagate(WAVE_MODLE_2D* model, float* result)
                             49.0/18.0*u_curr[i*nx+j]*density[i*nx+j];
 
                 //perform update of wave pressure
-                double q = model->abs_model[i*nx+j];
-                u_next[i*nx+j] = (dtdx2*pow(model->velocity[i*nx+j], 2)*(d2x+d2z)/density[i*nx+j] +
+                double q = abs[i*nx+j];
+                u_next[i*nx+j] = (dtdx2*pow(vel[i*nx+j], 2)*(d2x+d2z)/density[i*nx+j] +
                                   (2-pow(q, 2))*u_curr[i*nx+j]-(1-q)*u_prev[i*nx+j])/(1+q) ;
 
             }
@@ -75,29 +68,13 @@ int propagate(WAVE_MODLE_2D* model, float* result)
         memcpy(result+step*(nx-2*model->pad_num), u_next+model->receiver_depth*nx+model->pad_num,
                (nx-2*model->pad_num)*sizeof(float));
     }
-    if (!model->source)
-        free (src);
     free(u_curr);
     free(u_prev);
     free(u_next);
+    free(density);
     return 0;
 }
 
-
-int ricker_source(float frequency, float dt, float amplitude, float* src_values)
-{
-    float ts = MAGIC_SOURCE/frequency;
-    int ns = (int) (ts/dt + 0.9999);
-    ts = ns*dt;
-    float a2 = pow(frequency * M_PI, 2);
-    float t0 = ts/2 - dt/2;
-    for (int i = 0; i < ns; ++i)
-    {
-        float at2 = a2*pow(i*dt-t0, 2);
-        src_values[i] = amplitude * (1-2*at2) * exp(-at2);
-    }
-    return 0;
-}
 
 void get_density(float* velocity, int nx, int nz, float water_vel, float water_den, float cutoff, float* density_buffer)
 {

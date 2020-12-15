@@ -7,6 +7,8 @@ from numpy.ctypeslib import ndpointer
 from matplotlib import pyplot as plt
 import segyio
 from hicks_interpolation import interpolate
+from loss import get_loss
+
 
 class WaveModel2D(Structure):
     """
@@ -158,7 +160,7 @@ def create_test_model(velocity_model, dx, frequency, total_time, source_amplitud
     sources = source.reshape(-1, 1).astype(np.float32)
     return (WaveModel2D(nx=nx, nz=nz, dx=dx, dt=dt, pad_num=pad_size, total_time=total_time,
                        sx=sx+pad_size, sz=sz+3, receiver_depth=receiver_depth+3,
-                       water_den=water_den, water_vel=water_vel, cutoff=cutoff), 
+                       water_den=water_den, water_vel=water_vel, cutoff=cutoff),
             new_vel_model, absorb_facts, sources)
 
 
@@ -209,17 +211,18 @@ def artificial_model_test():
     dx = 7
     courant_number = 0.3
     abs_layer_coefficient = 5
-    abs_fact = 0.2
+    abs_fact = 0.4
     velocity_model = test_model(nx, nz)
-    dt = courant_number*dx/np.max(velocity_model)
+    dt = courant_number*dx/3500
     source = create_ricker(frequency, dt, source_amplitude, int(total_time/dt))
     model = create_test_model(velocity_model, dx, frequency, total_time, source_amplitude, sx, sz,
                               receiver_depth, dt, 1.0, 1500, 1650, abs_layer_coefficient, abs_fact, source)
     start = time.time()
     result = propagation(*model)
     end = time.time()
+    fpga = np.fromfile("./fpga.csv", dtype=np.float32).reshape(3333, -1)
     plot_at_receivers(result.T, nx, model[0].total_time, 0.03)
-    print("total time: {}".format(end-start))
+    print(end-start)
 
 
 def propagate(idx, water_den=1.0, water_vel=1500, cutoff=1650, vel_model=None, vel_file=None, sig_file=None, src_file=None,
@@ -249,4 +252,22 @@ def propagate(idx, water_den=1.0, water_vel=1500, cutoff=1650, vel_model=None, v
 
 if __name__ == "__main__":
     artificial_model_test()
-    
+    #nx = 501
+    #nz = 351
+    #vel_model = test_model(nx, nz)
+    #plt.imshow(vel_model, cmap="jet")
+    #plt.colorbar()
+    #plt.xlabel('x gridpoints')
+    #plt.ylabel('z gridpoints')
+    #plt.title('Velocity Model (m/s)')
+    #plt.show()
+
+
+    #result = propagate(300, 1000, 1500, 1650, None, "../model/000-Template/inputs/J50-TrueVp.sgy",
+    #                   "../model/000-Template/inputs/J50-Signature.sgy",
+    #                   "../model/000-Template/inputs/J50-Sources.geo",
+    #                   "../model/000-Template/inputs/J50-Receivers.geo",
+    #                   "../model/000-Template/inputs/J50-Observed.idx",
+    #                   50, 4.0, 6.144)
+    #plot_at_receivers(result, 480, 6.144, result.max())
+

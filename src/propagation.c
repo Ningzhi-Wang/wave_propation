@@ -6,9 +6,22 @@ union ufloat {
     unsigned u;
 };
 
+typedef struct thread_args {
+    int nz;
+    int nx;
+    float dtdx2;
+    float* velocity;
+    float* abs;
+    float* prev;
+    float* curr;
+    float* density;
+    float* next;
+} THREAD_ARGS;
+
 #define COURANT_NUMBER 0.7
 #define EPSILON 0.00001
 #define MAGIC_SOURCE 2.1
+#define NUM_THREAD 4
 
 #define isZero(f) fabs(f) < EPSILON
 #define notZero(f) fabs(f) > EPSILON
@@ -36,7 +49,7 @@ union ufloat {
 // helper function to simulate wave pressure at source location over time
 // maybe changed to other kind of wavelet if needed
 void get_density(float* velocity, int nx, int nz, float water_vel, float water_den, float cutoff, float* density_buffer);
-void get_val(int nz, int nx, float dtdx2, float* velocity, float* abs, float* prev, float* curr, float* density, float* next);
+void* get_val(void* args);
 
 int propagate(WAVE_MODLE_2D* model, float* vel,  float* abs, float* src, float* result)
 {
@@ -54,6 +67,13 @@ int propagate(WAVE_MODLE_2D* model, float* vel,  float* abs, float* src, float* 
     // Value used muliple times in propagation simulation
     float dtdx2 = pow(dt, 2)/pow(model->dx, 2);
     int total_steps = model->total_time/dt;
+    pthread_t thread_ids[NUM_THREAD];
+    THREAD_ARGS args[NUM_THREAD];
+    int sizes[NUM_THREAD];
+    int block_size = (model->nz-6) / NUM_THREAD;
+    for (int i = 0; i < NUM_THREAD; ++i)
+        sizes[i] = block_size;
+    sizes[NUM_THREAD-1] += (model->nz-6) % NUM_THREAD;
     // iteration over time steps
     for (int step = 0; step < total_steps; ++step)
     {
@@ -65,9 +85,25 @@ int propagate(WAVE_MODLE_2D* model, float* vel,  float* abs, float* src, float* 
         u_curr[src_loc] = isZero(src[step])?u_curr[src_loc]:src[step];
 
         //iteration over the model
-        int start_offset = 3*nx;
-        get_val(model->nz-6, nx, dtdx2, vel+start_offset, abs+start_offset, u_prev+start_offset,
-            u_curr, density, u_next+start_offset);
+        for (int i = 0; i < NUM_THREAD; ++i)
+        {
+            int start_offset = (i * block_size + 3) * nx;
+            args[i].nz = sizes[i];
+            args[i].nx = nx;
+            args[i].dtdx2 = dtdx2;
+            args[i].velocity = vel+start_offset;
+            args[i].abs = abs+start_offset;
+            args[i].prev = u_prev+start_offset;
+            args[i].curr = u_curr+start_offset-3*nx;
+            args[i].density = density+start_offset-3*nx;
+            args[i].next = u_next+start_offset;
+            pthread_create(thread_ids+i, NULL, get_val, (void *) (args+i));
+        }
+
+        for (int i = 0; i < NUM_THREAD; ++i)
+        {
+            pthread_join(thread_ids[i], NULL);
+        }
 
         //for (int i = 3; i < model->nz-3; ++i)
         //{
@@ -129,16 +165,19 @@ void get_density(float* velocity, int nx, int nz, float water_vel, float water_d
 }
 
 
-void get_val(int nz, int nx, float dtdx2, float* velocity, float* abs, float* prev, float* curr, float* density, float* next) {
-    for (int i = 0; i < nz; ++i)
+void* get_val(void* void_args) {
+    THREAD_ARGS* args = (THREAD_ARGS *) void_args;
+    int nx = args->nx;
+    for (int i = 0; i < args->nz; ++i)
     {
         for (int j = 0; j < nx; ++j)
         {
             int mask = - (j > 3 || j < nx-3);
             int offset = i * nx + j;
-            unsigned result = mask & GET_VALUE(dtdx2, velocity[offset], abs[offset], (density+offset), (curr+offset),
-                prev[offset], curr[offset+3*nx], density[offset+3*nx], nx);
-            next[offset] = *(float*) &result;
+            unsigned result = mask & GET_VALUE(args->dtdx2, args->velocity[offset], args->abs[offset], (args->density+offset), (args->curr+offset),
+                args->prev[offset], args->curr[offset+3*nx], args->density[offset+3*nx], nx);
+            args->next[offset] = *(float*) &result;
         }
     }
+    pthread_exit(NULL);
 }

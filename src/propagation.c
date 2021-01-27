@@ -30,21 +30,9 @@ typedef struct thread_args {
 
 #define GET_VALUE(dtdx2, vel, q, den, curr, prev, tv, td, nx) \
     ((union ufloat) {.f = (dtdx2*vel*vel*( \
-        1.0f/90.0f*(curr[0] * den[0] + \
-                  curr[6*nx] * den[6*nx]) - \
-        3.0f/20.0f*(curr[nx] * den[nx] + \
-                  curr[5*nx] * den[5*nx]) + \
-        3.0f/2.0f*(curr[2*nx] * den[2*nx] + \
-                  curr[4*nx] * den[4*nx]) - \
-        49.0f/18.0f*td*tv +\
-        1.0f/90.0f*(curr[3*nx-3]*den[3*nx-3] + \
-                  curr[3*nx+3]*den[3*nx+3]) - \
-        3.0f/20.0f*(curr[3*nx-2]*den[3*nx-2] + \
-                  curr[3*nx+2]*den[3*nx+2]) + \
-        3.0f/2.0f*(curr[3*nx-1]*den[3*nx-1] + \
-                 curr[3*nx+1]*den[3*nx+1]) - \
-        49.0f/18.0f*td*tv \
-   )/td+ (2-q*q)*tv-(1-q)*prev)/(1+q)}).u
+        (curr[0] * den[0] + curr[2*nx] * den[2*nx]) - 2.0f*td*tv +\
+        (curr[nx-1] * den[nx-1] + curr[nx+1] * den[nx+1]) - 2.0f*td*tv\
+    )/td+ (2-q*q)*tv-(1-q)*prev)/(1+q)}).u
 
 // helper function to simulate wave pressure at source location over time
 // maybe changed to other kind of wavelet if needed
@@ -70,10 +58,10 @@ int propagate(WAVE_MODLE_2D* model, float* vel,  float* abs, float* src, float* 
     pthread_t thread_ids[NUM_THREAD];
     THREAD_ARGS args[NUM_THREAD];
     int sizes[NUM_THREAD];
-    int block_size = (model->nz-6) / NUM_THREAD;
+    int block_size = (model->nz-2) / NUM_THREAD;
     for (int i = 0; i < NUM_THREAD; ++i)
         sizes[i] = block_size;
-    sizes[NUM_THREAD-1] += (model->nz-6) % NUM_THREAD;
+    sizes[NUM_THREAD-1] += (model->nz-2) % NUM_THREAD;
     // iteration over time steps
     for (int step = 0; step < total_steps; ++step)
     {
@@ -87,15 +75,15 @@ int propagate(WAVE_MODLE_2D* model, float* vel,  float* abs, float* src, float* 
         //iteration over the model
         for (int i = 0; i < NUM_THREAD; ++i)
         {
-            int start_offset = (i * block_size + 3) * nx;
+            int start_offset = (i * block_size + 1) * nx;
             args[i].nz = sizes[i];
             args[i].nx = nx;
             args[i].dtdx2 = dtdx2;
             args[i].velocity = vel+start_offset;
             args[i].abs = abs+start_offset;
             args[i].prev = u_prev+start_offset;
-            args[i].curr = u_curr+start_offset-3*nx;
-            args[i].density = density+start_offset-3*nx;
+            args[i].curr = u_curr+start_offset-nx;
+            args[i].density = density+start_offset-nx;
             args[i].next = u_next+start_offset;
             pthread_create(thread_ids+i, NULL, get_val, (void *) (args+i));
         }
@@ -128,8 +116,8 @@ int propagate(WAVE_MODLE_2D* model, float* vel,  float* abs, float* src, float* 
         //}
 
         // reflect top 2 layers above the surface to simulate free surface condition
-        memcpy(u_next, u_next+4*nx, nx*sizeof(float));
-        memcpy(u_next+nx, u_next+3*nx, nx*sizeof(float));
+        //memcpy(u_next, u_next+4*nx, nx*sizeof(float));
+        //memcpy(u_next+nx, u_next+3*nx, nx*sizeof(float));
         // copy wave pressures of receiver depth at this time step to result buffer
         memcpy(result+step*(nx-2*model->pad_num), u_next+model->receiver_depth*nx+model->pad_num,
                (nx-2*model->pad_num)*sizeof(float));
@@ -172,10 +160,10 @@ void* get_val(void* void_args) {
     {
         for (int j = 0; j < nx; ++j)
         {
-            int mask = - (j > 3 || j < nx-3);
+            int mask = - (j > 0 || j < nx-1);
             int offset = i * nx + j;
             unsigned result = mask & GET_VALUE(args->dtdx2, args->velocity[offset], args->abs[offset], (args->density+offset), (args->curr+offset),
-                args->prev[offset], args->curr[offset+3*nx], args->density[offset+3*nx], nx);
+                args->prev[offset], args->curr[offset+nx], args->density[offset+nx], nx);
             args->next[offset] = *(float*) &result;
         }
     }

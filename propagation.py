@@ -220,9 +220,8 @@ def artificial_model_test():
     start = time.time()
     result = propagation(*model)
     end = time.time()
-    fpga = np.fromfile("./fpga.csv", dtype=np.float32).reshape(3333, -1)
     plot_at_receivers(result.T, nx, model[0].total_time, 0.03)
-    print(end-start)
+    print(start-end)
 
 
 def propagate(idx, water_den=1.0, water_vel=1500, cutoff=1650, vel_model=None, vel_file=None, sig_file=None, src_file=None,
